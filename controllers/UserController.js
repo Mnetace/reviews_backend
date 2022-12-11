@@ -1,6 +1,28 @@
 import UserModel from '../models/User.js'
 import jwt from 'jsonwebtoken'
-import bcrypt, { hash } from 'bcrypt'
+import bcrypt from 'bcrypt'
+
+const userValidation = (paramId, reqId, role) => {
+  if (paramId !== reqId && role !== 'admin') {
+    res.status(403).json({
+      message: 'Failed to update a user',
+    })
+  }
+}
+
+const createToken = (id, role) => {
+  const token = jwt.sign(
+    {
+      _id: id,
+      role: role,
+    },
+    'secret123',
+    {
+      expiresIn: '30d',
+    }
+  )
+  return token
+}
 
 export const register = async (req, res) => {
   try {
@@ -18,15 +40,7 @@ export const register = async (req, res) => {
 
     const user = await doc.save()
 
-    const token = jwt.sign(
-      {
-        _id: user._id,
-      },
-      'secret123',
-      {
-        expiresIn: '30d',
-      }
-    )
+    const token = createToken(user._id, user.role)
 
     const { password_hash, ...user_data } = user._doc
 
@@ -63,20 +77,12 @@ export const login = async (req, res) => {
       })
     }
 
-    const token = jwt.sign(
-      {
-        _id: user._id,
-      },
-      'secret123',
-      {
-        expiresIn: '30d',
-      }
-    )
+    const token = createToken(user._id, user.role)
 
-    const { password_hash, ...user_data } = user._doc
+    delete user._doc.password_hash
 
     res.json({
-      ...user_data,
+      ...user._doc,
       token,
     })
   } catch (err) {
@@ -110,6 +116,12 @@ export const get_me = async (req, res) => {
 
 export const get_all = async (req, res) => {
   try {
+    if (req.userRole !== 'admin') {
+      return res.status(403).json({
+        message: 'Failed to get a users list',
+      })
+    }
+
     const users = (await UserModel.find().exec()).map((item) => {
       const { password_hash, ...user_data } = item._doc
       return user_data
@@ -132,10 +144,13 @@ export const get_all = async (req, res) => {
 
 export const remove = async (req, res) => {
   try {
-    const user_id = req.params.id
+    const userId = req.params.id
+
+    userValidation(userId, req.user_id, req.userRole)
+
     UserModel.findOneAndDelete(
       {
-        _id: user_id,
+        _id: userId,
       },
       (err, doc) => {
         if (err) {
@@ -166,75 +181,43 @@ export const remove = async (req, res) => {
 
 export const update = async (req, res) => {
   try {
-    const user_id = req.params.id
+    const userId = req.params.id
+
+    userValidation(userId, req.user_id, req.userRole)
+
+    if (req.userRole !== 'admin') {
+      await UserModel.updateOne(
+        {
+          _id: userId,
+        },
+        {
+          first_name: req.body.first_name,
+          last_name: req.body.last_name,
+          properties: req.body.properties,
+          avatar_url: req.body.avatar_url,
+        }
+      )
+      return res.json({
+        message: 'Update me success',
+      })
+    }
+
     await UserModel.updateOne(
       {
-        _id: user_id,
+        _id: userId,
       },
       {
-        email: req.body.email,
-        first_name: req.body.first_name,
-        last_name: req.body.last_name,
         role: req.body.role,
         is_blocked: req.body.is_blocked,
-        properties: req.body.properties,
-        avatar_url: req.body.avatar_url,
       }
     )
     res.json({
-      success: true,
+      message: 'Update by admin success',
     })
   } catch (err) {
     console.log(err)
     res.status(500).json({
       message: 'No access.',
-    })
-  }
-}
-
-export const update_me = async (req, res) => {
-  try {
-    const user_id = req.params.id
-    await UserModel.updateOne(
-      {
-        _id: user_id,
-      },
-      {
-        first_name: req.body.first_name,
-        last_name: req.body.last_name,
-        properties: req.body.properties,
-        avatar_url: req.body.avatar_url,
-      }
-    )
-    res.json({
-      success: true,
-    })
-  } catch (err) {
-    console.log(err)
-    res.status(500).json({
-      message: 'No access.',
-    })
-  }
-}
-
-export const update_rating = async (req, res) => {
-  try {
-    const user_id = req.params.id
-    await UserModel.updateOne(
-      {
-        _id: user_id,
-      },
-      {
-        rating: req.body.rating,
-      }
-    )
-    res.json({
-      success: true,
-    })
-  } catch (err) {
-    console.log(err)
-    res.status(500).json({
-      message: 'No access!',
     })
   }
 }

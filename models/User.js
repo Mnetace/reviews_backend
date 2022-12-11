@@ -29,7 +29,7 @@ const UserSchema = new mongoose.Schema(
       required: true,
       default: false,
     },
-    rating: {
+    likes_number: {
       type: Number,
       default: null,
     },

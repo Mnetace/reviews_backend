@@ -1,17 +1,10 @@
 import express from 'express'
 import mongoose from 'mongoose'
 import cors from 'cors'
-import { UserController } from './controllers/index.js'
-import {
-  checkAuth,
-  checkAdmin,
-  checkMe,
-  handleValidationErrors,
-} from './utils/index.js'
-import {
-  loginValidation,
-  registerValidation,
-} from './validations/UserValidations.js'
+import userRoutes from './routes/user.routes.js'
+import postRoutes from './routes/post.routes.js'
+import tagRoutes from './routes/tag.routes.js'
+import topicRoutes from './routes/topic.routes.js'
 
 mongoose
   .connect(
@@ -28,33 +21,10 @@ const app = express()
 app.use(express.json())
 app.use(cors())
 
-app.post(
-  '/auth/register',
-  registerValidation,
-  handleValidationErrors,
-  UserController.register
-)
-app.post(
-  '/auth/login',
-  loginValidation,
-  handleValidationErrors,
-  UserController.login
-)
-
-app.get('/auth/me', checkAuth, UserController.get_me)
-app.get('/auth/all', checkAuth, checkAdmin, UserController.get_all)
-
-// Update any user (administrator only)
-app.patch('/auth/update/:id', checkAuth, checkAdmin, UserController.update)
-// Update yourself (only to yourself)
-app.patch('/auth/update/me/:id', checkAuth, checkMe, UserController.update_me)
-// Update the rating to the user (all users)
-app.patch('/auth/update/rating/:id', checkAuth, UserController.update_rating)
-
-// Delete any user (administrator only)
-app.delete('/auth/remove/:id', checkAuth, checkAdmin, UserController.remove)
-// Delete yourself (only to yourself)
-app.delete('/auth/remove/me/:id', checkAuth, checkMe, UserController.remove)
+app.use('/auth', userRoutes)
+app.use('/posts', postRoutes)
+app.use('/tags', tagRoutes)
+app.use('/topics', topicRoutes)
 
 app.listen(process.env.PORT || 4444, (err) => {
   if (err) {
