@@ -15,11 +15,13 @@ const PostSchema = new mongoose.Schema(
       type: String,
       required: true,
     },
+    // TODO
     topic_id: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Topic',
     },
-    tags: [
+    // TODO: tag_names (only names wihtout IDs)
+    tag_ids: [
       {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Tag',

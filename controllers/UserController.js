@@ -95,7 +95,7 @@ export const login = async (req, res) => {
 
 export const get_me = async (req, res) => {
   try {
-    const user = await UserModel.findById(req.user_id)
+    const user = await UserModel.findById(req.userId)
 
     if (!user) {
       return res.status(404).json({
@@ -146,7 +146,7 @@ export const remove = async (req, res) => {
   try {
     const userId = req.params.id
 
-    userValidation(userId, req.user_id, req.userRole)
+    userValidation(userId, req.userId, req.userRole)
 
     UserModel.findOneAndDelete(
       {
@@ -183,7 +183,7 @@ export const update = async (req, res) => {
   try {
     const userId = req.params.id
 
-    userValidation(userId, req.user_id, req.userRole)
+    userValidation(userId, req.userId, req.userRole)
 
     if (req.userRole !== 'admin') {
       await UserModel.updateOne(

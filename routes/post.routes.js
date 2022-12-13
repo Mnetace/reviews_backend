@@ -13,9 +13,14 @@ router.get('/', PostController.get_all)
 router.post('/', checkAuth, PostController.create)
 
 // Update post
-router.patch('/:id')
+router.patch('/:id', checkAuth, PostController.update)
 
 // Delete post
 router.delete('/:id', checkAuth, PostController.remove)
+
+// Add like to post
+router.post('/:id/like', checkAuth, PostController.addLike)
+// Remove like from post
+router.delete('/:id/like', checkAuth, PostController.removeLike)
 
 export default router

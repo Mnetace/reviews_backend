@@ -3,19 +3,8 @@ import jwt from 'jsonwebtoken'
 export default (req, res, next) => {
   const token = (req.headers.authorization || '').replace(/Bearer\s?/, '')
 
-  if (token) {
-    try {
-      const decoded = jwt.verify(token, 'secret123')
-
-      req.user_id = decoded._id
-      req.userRole = decoded.role
-
-      next()
-    } catch (err) {
-      return res.status(403).json({
-        message: 'No access!',
-      })
-    }
+  if (req.userId) {
+    next()
   } else {
     return res.status(403).json({
       message: 'No access!',

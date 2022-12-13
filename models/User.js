@@ -31,7 +31,7 @@ const UserSchema = new mongoose.Schema(
     },
     likes_number: {
       type: Number,
-      default: null,
+      default: 0,
     },
     properties: {
       theme: {
