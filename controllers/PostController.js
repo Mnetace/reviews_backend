@@ -5,17 +5,61 @@ import PostSchema from '../models/Post.js'
 import { session } from './../mongoose.js'
 import { HttpError } from './errors/HttpError.js'
 import TopicModel from '../models/Topic.js'
+import TagModel from '../models/Tag.js'
 import mongoose from 'mongoose'
+import {knownTopicGroups} from "./TopicGroupController.js";
 
-// TODO
-const getOrCreateTopic = (req) => {}
+// getOrCreateTopic("id", undefined)
+// getOrCreateTopic(undefined, {title: "t", group: "Films"})
+// returns ObjectId("topic id")
+const getOrCreateTopic = async (existingTopicId, newTopic) => {
+  if (existingTopicId && newTopic) {
+    throw new HttpError(400, 'Pass either topic_id or topic fields but not both')
+  }
+  if (existingTopicId) {
+    if (!(await TopicModel.findOne({_id: existingTopicId}))) {
+      throw new HttpError(400, `Topic ${existingTopicId} not found`)
+    }
+    return new mongoose.Types.ObjectId(existingTopicId)
+  }
 
-// TODO: create and delete tags (if not connections with another posts)
-const proccesTags = (oldTags, newTags) => {}
+  if (!knownTopicGroups.includes(newTopic.group)) {
+    throw new HttpError(
+        400,
+        `Unknown topic group: ${newTopic.group}. ` +
+        `Should be one of: ${knownTopicGroups.join(', ')}`
+    )
+  }
+  const topicDoc = new TopicModel({
+    title: newTopic.title,
+    group: newTopic.group,
+  })
+  await topicDoc.save()
+  return topicDoc._id
+}
 
-const agregation = (match, userId) => {
+// oldTags and newTags are arrays of tag names
+const handleTagsChange = async (oldTags, newTags) => {
+  const tagsDeleted = oldTags.filter(oldTag => !newTags.includes(oldTag))
+  const tagsAdded = newTags.filter(newTag => !oldTags.includes(newTag))
+
+  await Promise.all(tagsAdded.map(tagAdded => TagModel.findOneAndUpdate(
+      {text: tagAdded},
+      {text: tagAdded},
+      {upsert: true, new: true, setDefaultsOnInsert: true}
+  ).exec()))
+
+  await Promise.all(tagsDeleted.map(async tagDeleted => {
+    const postsWithTheTag = await PostModel.find({tags: {$elemMatch: {$eq: tagDeleted}}}).exec()
+    if (postsWithTheTag.length === 0) {
+      await TagModel.deleteOne({text: tagDeleted}).exec()
+    }
+  }))
+}
+
+const preparePostAggregation = (matchCondition, viewingUserId) => {
   return [
-    match,
+    matchCondition,
     {
       $project: {
         title: 1,
@@ -25,7 +69,7 @@ const agregation = (match, userId) => {
         createdAt: 1,
         updatedAt: 1,
         user_id: 1,
-        tag_ids: 1,
+        tags: 1,
         topic_id: 1,
       },
     },
@@ -35,14 +79,6 @@ const agregation = (match, userId) => {
         localField: 'user_id',
         foreignField: '_id',
         as: 'user',
-      },
-    },
-    {
-      $lookup: {
-        from: 'tags',
-        localField: 'tag_ids',
-        foreignField: '_id',
-        as: 'tags',
       },
     },
     {
@@ -63,7 +99,7 @@ const agregation = (match, userId) => {
           {
             $match: {
               $expr: {
-                $eq: ['$user_id', new mongoose.Types.ObjectId(userId)],
+                $eq: ['$user_id', new mongoose.Types.ObjectId(viewingUserId)],
               },
             },
           },
@@ -109,39 +145,36 @@ const agregation = (match, userId) => {
     },
   ]
 }
-// TODO: write the check in a separate file (for users and posts)
-const userValidation = (userId, reqId, role, message) => {
-  if (userId !== reqId && role !== 'admin') {
-    res.status(403).json({
-      message: `Failed to ${message} an post`,
-    })
+
+const checkUserPostAccess = (postUserId, loggedInUserId, loggedInUserRole, action) => {
+  if (postUserId !== loggedInUserId && loggedInUserRole !== 'admin') {
+    throw new HttpError(403, `You are not allowed to ${action} this post`)
   }
 }
 
 export const updatePostLike = async (req, res, addLike) => {
-  const post = await PostSchema.findById(req.params.id)
+  await session.withTransaction(async () => {
+    const post = await PostSchema.findById(req.params.id)
 
-  if (post === undefined) {
-    throw new HttpError(400, 'Post not found')
-  }
+    if (post === undefined) {
+      throw new HttpError(400, 'Post not found')
+    }
 
-  const postLikeData = {
-    user_id: req.userId,
-    post_id: req.params.id,
-  }
+    const postLikeData = {
+      user_id: req.userId,
+      post_id: req.params.id,
+    }
 
-  const postLike = await PostLike.findOne(postLikeData)
+    const postLike = await PostLike.findOne(postLikeData)
 
-  if (addLike && postLike !== null) {
-    throw new HttpError(409, 'Like is already added')
-  }
+    if (addLike && postLike !== null) {
+      throw new HttpError(409, 'Like is already added')
+    }
 
-  if (!addLike && postLike === null) {
-    throw new HttpError(409, 'Like does not exist')
-  }
+    if (!addLike && postLike === null) {
+      throw new HttpError(409, 'Like does not exist')
+    }
 
-  session.startTransaction()
-  try {
     if (addLike) {
       await new PostLike(postLikeData).save()
     } else {
@@ -155,57 +188,35 @@ export const updatePostLike = async (req, res, addLike) => {
         $inc: { likes_number: addLike ? 1 : -1 },
       }
     )
-    session.commitTransaction()
-  } catch (e) {
-    session.abortTransaction()
-    throw e
-  }
-
-  res.json({
-    success: true,
+    res.json({ success: true })
   })
 }
-// TODO: (create and update (only for tags without topic))
-// req.body.tags
+
+// req.body.tags - tag names array
 // req.body.topic_id || req.body.topic === {title, group}
 export const create = async (req, res) => {
-  try {
-    const userId = req.body.user_id || req.userId
+  const userId = req.body.user_id || req.userId
+  checkUserPostAccess(userId, req.userId, req.userRole, 'create')
 
-    userValidation(userId, req.userId, req.userRole, 'create')
-
-    const topicId = getOrCreateTopic(req)
-
-    // TODO: session.startTransaction
-    proccesTags([], req.body.tags)
-
-    // TODO:
-    // const topic = new TopicModel({
-    //   title: req.body.title,
-    //   group: req.body.group,
-    // })
-    //
-    // const topic = await doc.save()
-
+  await session.withTransaction(async () => {
+    // todo: check user exists
+    const topicId = await getOrCreateTopic(req.body.topic_id, req.body.topic)
     const doc = new PostModel({
       title: req.body.title,
       topic_id: topicId,
-      tag_ids: req.body.tags,
+      tags: req.body.tags,
       text: req.body.text,
       image_url: req.body.image_url,
       rating: req.body.rating,
-      user_id: userId,
+      user_id: new mongoose.Types.ObjectId(userId),
     })
-
     const post = await doc.save()
-
-    res.json(post)
-  } catch (err) {
-    console.log(err)
-    res.status(500).json({
-      message: 'Failed to create an article',
+    await handleTagsChange([], req.body.tags)
+    res.json({
+      success: true,
+      post_id: post._id.toString()
     })
-  }
+  })
 }
 
 export const get_one = async (req, res) => {
@@ -215,113 +226,74 @@ export const get_one = async (req, res) => {
     },
   }
 
-  const posts = await PostModel.aggregate(agregation(match, req.userId)).exec()
-
+  const posts = await PostModel.aggregate(preparePostAggregation(match, req.userId)).exec()
   if (posts.length === 0) {
-    res.status(404).json({
-      message: 'Post not found',
-    })
-    return
+    throw new HttpError(404, 'Post not found')
   }
 
   res.json(posts[0])
 }
 
+// Possible query params:
+//    sort=field or sort=-field    (to set sort order)
+//    tag=tag_name                 (to show posts for tag)
+//    user_id=
+//    topic_id=
 export const get_all = async (req, res) => {
-  try {
-    const sortOrder = req.query.sort || '-createdAt'
-    const userId = req.query.user_id
+  const sortOrder = req.query.sort || '-createdAt'
+  const filter = {}
+  req.query.user_id && (filter.user_id = req.query.user_id)
+  req.query.topic_id && (filter.topic_id = req.query.topic_id)
+  req.query.tag && (filter.tags = {$elemMatch: {$eq: req.query.tag}})
 
-    const filterCondition = userId ? { user_id: userId } : {}
-
-    const match = {
-      $match: filterCondition,
-    }
-
-    const posts = await PostModel.aggregate(agregation(match, req.userId))
-      .sort(sortOrder)
-      .exec()
-
-    res.json(posts)
-  } catch (err) {
-    console.log(err)
-    res.status(500).json({
-      message: 'Failed to get posts',
-    })
+  const match = {
+    $match: filter,
   }
+
+  const posts = await PostModel.aggregate(preparePostAggregation(match, req.userId))
+    .sort(sortOrder)
+    .exec()
+
+  res.json(posts)
 }
 
 export const remove = async (req, res) => {
-  try {
-    const postId = req.params.id
-
-    const post = await PostModel.findOne(postId)
-
-    userValidation(post.user_id, req.userId, req.userRole, 'delete')
-
-    proccesTags(post.tags, [])
-
-    PostModel.findOneAndDelete(
-      {
-        _id: postId,
-      },
-      (err, doc) => {
-        if (err) {
-          console.log(err)
-          return res.status(500).json({
-            message: 'Couldn not delete the article',
-          })
-        }
-
-        if (!doc) {
-          return res.status(404).json({
-            message: 'Article not found',
-          })
-        }
-
-        res.json({
-          succes: true,
-        })
-      }
-    )
-  } catch (err) {
-    console.log(err)
-    res.status(500).json({
-      message: 'Failed to get articles',
-    })
+  const postFilter = { _id: new mongoose.Types.ObjectId(req.params.id) }
+  const post = await PostModel.findOne(postFilter)
+  if (!post) {
+    throw new HttpError(404, 'Post not found')
   }
+
+  checkUserPostAccess(post.user_id.toString(), req.userId, req.userRole, 'delete')
+
+  await session.withTransaction(async () => {
+    await PostModel.findOneAndDelete(postFilter).exec()
+    await handleTagsChange(post.tags, [])
+    res.json({ success: true })
+  })
 }
 
 export const update = async (req, res) => {
-  try {
-    const postId = req.params.id
+  const postId = req.params.id
+  const post = await PostModel.findOne({_id: postId})
+  checkUserPostAccess(post.user_id.toString(), req.userId, req.userRole, 'update')
 
-    const post = await PostModel.findOne(postId)
-
-    proccesTags(post.tags, req.body.tags)
-
+  await session.withTransaction(async () => {
     await PostModel.updateOne(
-      {
-        _id: postId,
-      },
-      {
-        title: req.body.title,
-        topic_id: req.body.topic_id,
-        tag_ids: req.body.tags,
-        text: req.body.text,
-        image_url: req.body.image_url,
-        rating: req.body.rating,
-      }
+        {
+          _id: postId,
+        },
+        {
+          title: req.body.title,
+          tags: req.body.tags,
+          text: req.body.text,
+          image_url: req.body.image_url,
+          rating: req.body.rating,
+        }
     )
-    res.json({
-      success: true,
-    })
-  } catch (err) {
-    console.log(err)
-    res.status(500).json({
-      message: 'Failed to update an article',
-    })
-  }
+    await handleTagsChange(post.tags, req.body.tags)
+    res.json({ success: true })
+  })
 }
 
 export const addLike = async (req, res) => {
